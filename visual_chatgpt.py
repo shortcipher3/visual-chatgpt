@@ -9,6 +9,9 @@ from PIL import Image
 import numpy as np
 import argparse
 
+import subprocess
+import shutil
+
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 from transformers import pipeline, BlipProcessor, BlipForConditionalGeneration, BlipForQuestionAnswering
 from transformers import AutoImageProcessor, UperNetForSemanticSegmentation
@@ -23,19 +26,48 @@ from langchain.agents.tools import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.llms.openai import OpenAI
 
-VISUAL_CHATGPT_PREFIX = """Visual ChatGPT is designed to be able to assist with a wide range of text and visual related tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. Visual ChatGPT is able to generate human-like text based on the input it receives, allowing it to engage in natural-sounding conversations and provide responses that are coherent and relevant to the topic at hand.
+VIVINT_CHATGPT_PREFIX = """Vivint Virtual Assistant is designed to be able to assist with a wide range of text, visual, and Vivint smart home related tasks from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. Vivint Virtual Assistant is able to generate human-like text based on the input it receives, allowing it to engage in natural-sounding conversations and provide responses that are coherent and relevant to the topic at hand.
 
-Visual ChatGPT is able to process and understand large amounts of text and images. As a language model, Visual ChatGPT can not directly read images, but it has a list of tools to finish different visual tasks. Each image will have a file name formed as "image/xxx.png", and Visual ChatGPT can invoke different tools to indirectly understand pictures. When talking about images, Visual ChatGPT is very strict to the file name and will never fabricate nonexistent files. When using tools to generate new image files, Visual ChatGPT is also known that the image may not be the same as the user's demand, and will use other visual question answering tools or description tools to observe the real image. Visual ChatGPT is able to use tools in a sequence, and is loyal to the tool observation outputs rather than faking the image content and image file name. It will remember to provide the file name from the last tool observation, if a new image is generated.
+Vivint Virtual Assistant is able to work with, process, and understand large amounts of text and images. As a language model, Vivint Virtual Assistant can not directly access or read images, but it has a list of tools to finish different smart home and visual tasks. Each image will have a file name formed as "image/xxx.png", and Vivint Virtual Assistant can invoke different tools to indirectly understand pictures. When talking about images, Vivint Virtual Assistant is very strict to the file name and will never fabricate nonexistent files. When using tools to generate new image files, Vivint Virtual Assistant is also known that the image may not be the same as the user's demand, and will use other visual question answering tools or description tools to observe the real image. Vivint Virtual Assistant is able to use tools in a sequence, and is loyal to the tool observation outputs rather than faking the image content and image file name. It will remember to provide the file name from the last tool observation, if a new image is generated.
 
-Human may provide new figures to Visual ChatGPT with a description. The description helps Visual ChatGPT to understand this image, but Visual ChatGPT should use tools to finish following tasks, rather than directly imagine from the description.
+Similarly Vivint Virtual Assistant is able to work with Vivint Smart Home devices. As a language model, Vivint Virtual Assistant can not directly access Vivint smart home devices, but it has a list of tools to finish different smart home tasks. Vivint Virtual Assistant can get information or messages from the devices using a tool. Images received from smart home cameras may be further analyzed with the image tools as described above. Vivint Virtual Assistant will not answer questions about the smart home without consulting a tool and using information from the tool's response. Device types that Vivint Virtual Assistant works with include camera devices, light devices, and garage door devices. Each home will specify the devices belonging to the smart home with a device type, name, and identifier for the device in the following comma-separated format:
+type,name,identifier
+type,name,identifier
 
-Overall, Visual ChatGPT is a powerful visual dialogue assistant tool that can help with a wide range of tasks and provide valuable insights and information on a wide range of topics. 
+Vivint Virtual Assistant will be provided with a list of devices in the human's Vivint Smart Home, the list will include the device type, device name, and device identifier. Vivint Virtual Assistant uses the device identifier with tools, however when it interacts with the human it will refer to the device by it's name. The human may refer to a device by its type, name, or other words describing the location of the device, for example a doorbell camera can be used to tell if somebody is at the door or on the porch.
 
+For example a smart home may provide a list of devices like the following:
+camera,nanny camera,ffffffff-1111-2222-3333-444444444444
+garage door,my garage,0ff12365-4325-9876-3456-1234656772d6
+light,Driveway light,0ff12321-4325-9876-3456-1234656772d6
+
+The human might say "shut the garage door". Vivint Virtual Assistant would use a tool to shut the garage door using the device identifier 0ff12365-4325-9876-3456-1234656772d6, then report to the human: "The garage door my garage has been closed"
+
+The human might say "check my nanny camera". Vivint Virtual Assistant would use a tool to get an image from the nanny camera using the device identifier ffffffff-1111-2222-3333-444444444444, use another tool to get a description of the image contents - for example an empty room, then report to the human "the nanny camera currently shows an empty room"
+
+The human might say "who is at my door". Vivint Virtual Assistant would use a tool to get an image from the doorbell camera using the device identifier ffffffff-1111-2222-3333-444444444444, use another tool to get a description of the image contents - for example "A picture of Rasesh Patel", then report to the human "the doorbell camera currently shows Rasesh Patel"
+
+The human might say "what is going on on my driveway". Vivint Virtual Assistant would use a tool to get an image from the driveway camera using the device identifier ffffffff-1111-2222-3333-444444444444, use another tool to get a description of the image contents - for example "A dog chasing a deer", then report to the human "the driveway camera currently shows a dog chasing a deer"
+
+The human might say "tell me about my smart home" Vivint Virtual Assistant would give a list of devices using the provided smart home devices, in the example Vivint Virtual Assistant might say something like "The smart home has one camera - nanny camera, one garage door - my garage, and one light - Driveway light".
+
+The above examples are for a fictitious smart home. A list using the provided format will be provided later on. Vivint Virtual Assistant will use only device types, device names, and device identifiers provided in the human's smart home device list.
+
+Human may provide new figures to Vivint Virtual Assistant with a description. The description helps Vivint Virtual Assistant to understand this image, but Vivint Virtual Assistant should use tools to finish following tasks, rather than directly imagine from the description.
+
+Overall, Vivint Virtual Assistant is a powerful visual dialogue assistant tool that can help with a wide range of tasks and provide valuable insights and information on a wide range of topics. 
+
+Vivint Smart Home Devices
+-------------------------
+
+Vivint Virtual Assistant has access to this list of smart home devices belonging to the human and can access these devices through tools:
+
+{}
 
 TOOLS:
 ------
 
-Visual ChatGPT  has access to the following tools:"""
+Vivint Virtual Assistant  has access to the following tools:"""
 
 VISUAL_CHATGPT_FORMAT_INSTRUCTIONS = """To use a tool, please use the following format:
 
@@ -812,8 +844,64 @@ class VisualQuestionAnswering:
         return answer
 
 
+class VivintRetrieveFrame:
+    def __init__(self, device):
+        print("Initializing VivintRetrieveFrame to %s" % device)
+        self.device = device
+        self.caption = ImageCaptioning("cpu")
+
+    @prompts(name="Get a picture from a Vivint Smart Home Camera",
+             description="useful when you need to get a current picture from a smart home camera. "
+                         "like: show me my porch, what is on my porch, has a package been delivered, is somebody at the door, is somebody on the driveway. "
+                         "The input to this tool should be the camera's unique identifier")
+    def inference(self, inputs):
+        subprocess.run(f"./get_image.sh {inputs}", shell=True)
+        image_path = 'image/snapshot.png'
+        updated_image_path = get_new_image_name(image_path, func_name="vivint-camera")
+        shutil.copy(image_path, updated_image_path)
+        print(f"\nProcessed VivintRetrieveFrame, Input Camera: {inputs}, Output Image: {updated_image_path}")
+        description = self.caption.inference(updated_image_path)
+        prompt = f"\nHuman: The camera provided a figure named {updated_image_path}. The description is: {description}. " \
+                       "This information helps you to understand this image, " \
+                       "but you should use tools to finish following tasks, " \
+                       "rather than directly imagine from my description, include the image in your response. If you understand, say \"Received\". \n"
+        return prompt
+
+
+class VivintGarageDoor:
+    def __init__(self, device):
+        print("Initializing VivintGarageDoor to %s" % device)
+
+    @prompts(name="Open a Vivint Smart Home Garage door",
+             description="useful when you need to open a Vivint Smart Home Garage door. "
+                         "like: open my garage, open my garage door, close my garage door, close the garage. "
+                         "The input to this tool should be a comma seperated string of two, representing the garage door's unique identifier and the action to take open or close. For example: 0f2fffaf-8101-2222-3333-448464442414,open.")
+    def inference(self, inputs):
+        device, action = inputs.split(',')
+        subprocess.run(f"./activate_garage.sh {device} {action}", shell=True)
+        status = f"The garage door is {action}"
+        print(f"\nProcessed VivintGarageDoor, Input Garage Door: {device}, Input Action: {action}, Output Garage Door Status: {status}")
+        return status
+
+
+class VivintLight:
+    def __init__(self, device):
+        print("VivintLight to %s" % device)
+
+    @prompts(name="Turn on or off the Vivint smart home light",
+             description="useful when you need to turn on or off a Vivint Smart Home light. "
+                         "like: turn on my light, turn off my light, it is dark in here. "
+                         "The input to this tool should be a comma seperated string of two, representing the light's unique identifier and the action to take on or off. ")
+    def inference(self, inputs):
+        device, action = inputs.split(',')
+        subprocess.run(f"./switch_light.sh {device} {action}", shell=True)
+        status = f"The light is {action}"
+        print(f"\nProcessed VivintLight, Light: {device}, Action {action}, Output Light Status: {status}")
+        return status
+
+
 class ConversationBot:
-    def __init__(self, load_dict):
+    def __init__(self, load_dict, device_file):
         # load_dict = {'VisualQuestionAnswering':'cuda:0', 'ImageCaptioning':'cuda:1',...}
         print(f"Initializing VisualChatGPT, load_dict={load_dict}")
         if 'ImageCaptioning' not in load_dict:
@@ -833,6 +921,9 @@ class ConversationBot:
                     func = getattr(instance, e)
                     self.tools.append(Tool(name=func.name, description=func.description, func=func))
 
+        with open(device_file) as f:
+            devices = f.read()
+
         self.agent = initialize_agent(
             self.tools,
             self.llm,
@@ -840,7 +931,7 @@ class ConversationBot:
             verbose=True,
             memory=self.memory,
             return_intermediate_steps=True,
-            agent_kwargs={'prefix': VISUAL_CHATGPT_PREFIX, 'format_instructions': VISUAL_CHATGPT_FORMAT_INSTRUCTIONS,
+            agent_kwargs={'prefix': VIVINT_CHATGPT_PREFIX.format(devices), 'format_instructions': VISUAL_CHATGPT_FORMAT_INSTRUCTIONS,
                           'suffix': VISUAL_CHATGPT_SUFFIX}, )
 
     def run_text(self, text, state):
@@ -879,9 +970,10 @@ class ConversationBot:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load', type=str, default="ImageCaptioning_cuda:0,Text2Image_cuda:0")
+    parser.add_argument('--device-file', "-d", type=str, default="config/chris.csv")
     args = parser.parse_args()
     load_dict = {e.split('_')[0].strip(): e.split('_')[1].strip() for e in args.load.split(',')}
-    bot = ConversationBot(load_dict=load_dict)
+    bot = ConversationBot(load_dict=load_dict, device_file=args.device_file)
     with gr.Blocks(css="#chatbot .overflow-y-auto{height:500px}") as demo:
         chatbot = gr.Chatbot(elem_id="chatbot", label="Visual ChatGPT")
         state = gr.State([])
